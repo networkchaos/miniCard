@@ -1,0 +1,95 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model UserProfile {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  email         String   @unique
+  name          String
+  avatar        String?
+  virtualCardId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  paymentLinks  PaymentLink[] @relation("UserPaymentLinks")
+  cardBalances  CardBalance[]
+  sentTransactions Transaction[] @relation("SentTransactions")
+  receivedTransactions Transaction[] @relation("ReceivedTransactions")
+
+  @@map("user_profiles")
+}
+
+model PaymentLink {
+  id           String    @id @default(cuid())
+  creatorId    String
+  tokenAddress String
+  amount       String
+  secretHash   String
+  expiry       DateTime
+  claimed      Boolean   @default(false)
+  claimedBy    String?
+  claimedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  fiatAmount   Float?
+  fiatCurrency String?
+  onRamp       Boolean   @default(false)
+  offRamp      Boolean   @default(false)
+
+  creator      UserProfile @relation("UserPaymentLinks", fields: [creatorId], references: [id])
+
+  @@map("payment_links")
+}
+
+model CardBalance {
+  id          String   @id @default(cuid())
+  userId      String
+  cardId      String
+  balance     Float
+  currency    String   @default("USD")
+  lastUpdated DateTime @default(now())
+
+  user        UserProfile @relation(fields: [userId], references: [id])
+
+  @@unique([userId, cardId])
+  @@map("card_balances")
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  amount      Float
+  tokenAddress String
+  description String?
+  status      String   @default("pending") // pending, completed, failed
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  fromUser    UserProfile @relation("SentTransactions", fields: [fromUserId], references: [id])
+  toUser      UserProfile @relation("ReceivedTransactions", fields: [toUserId], references: [id])
+
+  @@map("transactions")
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String
+  merchantId  String
+  tokenAddress String
+  amount      Float
+  period      Int      // in seconds
+  nextDue     DateTime
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@map("subscriptions")
+}
