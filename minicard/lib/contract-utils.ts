@@ -1,5 +1,6 @@
 // Contract interaction utilities
 import { ethers } from 'ethers'
+import { getReferralTag, submitReferral } from '@divvi/referral-sdk'
 
 // Contract ABIs (simplified for frontend)
 export const VAULT_ABI = [
@@ -64,23 +65,65 @@ export const CELO_STABLECOINS = {
 export class ContractManager {
   private provider: ethers.providers.Web3Provider
   private signer: ethers.Signer
+  private readonly divviConsumerAddress: string = '0x33741cA127Df8256bDB24cD0f7B7aE91cdB6536a'
 
   constructor(provider: ethers.providers.Web3Provider) {
     this.provider = provider
     this.signer = provider.getSigner()
   }
 
+  private async sendWithReferral(contractAddress: string, populated: ethers.PopulatedTransaction) {
+    const userAddress = await this.signer.getAddress()
+    const referralTag = getReferralTag({
+      user: userAddress,
+      consumer: this.divviConsumerAddress,
+    })
+
+    const originalData = populated.data ?? '0x'
+    const dataNoPrefix = originalData.startsWith('0x') ? originalData.slice(2) : originalData
+    const tagNoPrefix = referralTag.startsWith('0x') ? referralTag.slice(2) : referralTag
+    const dataWithTag = `0x${dataNoPrefix}${tagNoPrefix}`
+
+    const tx = await this.signer.sendTransaction({
+      to: contractAddress,
+      data: dataWithTag,
+      value: populated.value || 0,
+      gasLimit: populated.gasLimit,
+      gasPrice: populated.gasPrice,
+      nonce: populated.nonce,
+    })
+
+    const receipt = await tx.wait()
+
+    try {
+      const network = await this.provider.getNetwork()
+      await submitReferral({ txHash: tx.hash, chainId: Number(network.chainId) })
+    } catch (e) {
+      // Non-fatal: referral submission can be retried out of band
+      console.warn('Divvi referral submission failed', e)
+    }
+
+    return receipt
+  }
+
   // Vault contract interactions
   async depositStable(tokenAddress: string, amount: string) {
     const vaultContract = new ethers.Contract(CONTRACT_ADDRESSES.vault, VAULT_ABI, this.signer)
-    const tx = await vaultContract.depositStable(tokenAddress, ethers.utils.parseUnits(amount, 6))
-    return await tx.wait()
+    const populated = await vaultContract.populateTransaction.depositStable(
+      tokenAddress,
+      ethers.utils.parseUnits(amount, 6)
+    )
+    return await this.sendWithReferral(CONTRACT_ADDRESSES.vault, populated)
   }
 
   async withdrawStable(tokenAddress: string, amount: string, toAddress: string) {
     const vaultContract = new ethers.Contract(CONTRACT_ADDRESSES.vault, VAULT_ABI, this.signer)
-    const tx = await vaultContract.withdraw(tokenAddress, ethers.utils.parseUnits(amount, 6), toAddress)
-    return await tx.wait()
+    const populated = await vaultContract.populateTransaction.withdraw(
+      tokenAddress,
+      ethers.utils.parseUnits(amount, 6),
+      toAddress
+    )
+    return await this.sendWithReferral(CONTRACT_ADDRESSES.vault, populated)
   }
 
   async getBalance(userAddress: string, tokenAddress: string) {
@@ -92,19 +135,19 @@ export class ContractManager {
   // Subscription contract interactions
   async createSubscription(merchantAddress: string, tokenAddress: string, amount: string, period: number) {
     const subscriptionContract = new ethers.Contract(CONTRACT_ADDRESSES.subscriptionManager, SUBSCRIPTION_ABI, this.signer)
-    const tx = await subscriptionContract.createSubscription(
+    const populated = await subscriptionContract.populateTransaction.createSubscription(
       merchantAddress,
       tokenAddress,
       ethers.utils.parseUnits(amount, 6),
       period
     )
-    return await tx.wait()
+    return await this.sendWithReferral(CONTRACT_ADDRESSES.subscriptionManager, populated)
   }
 
   async cancelSubscription(subscriptionId: number) {
     const subscriptionContract = new ethers.Contract(CONTRACT_ADDRESSES.subscriptionManager, SUBSCRIPTION_ABI, this.signer)
-    const tx = await subscriptionContract.cancelSubscription(subscriptionId)
-    return await tx.wait()
+    const populated = await subscriptionContract.populateTransaction.cancelSubscription(subscriptionId)
+    return await this.sendWithReferral(CONTRACT_ADDRESSES.subscriptionManager, populated)
   }
 
   async getSubscription(subscriptionId: number) {
@@ -115,8 +158,11 @@ export class ContractManager {
   // Test token interactions
   async mintTestTokens(tokenAddress: string, amount: string) {
     const tokenContract = new ethers.Contract(tokenAddress, TEST_TOKEN_ABI, this.signer)
-    const tx = await tokenContract.mint(await this.signer.getAddress(), ethers.utils.parseUnits(amount, 6))
-    return await tx.wait()
+    const populated = await tokenContract.populateTransaction.mint(
+      await this.signer.getAddress(),
+      ethers.utils.parseUnits(amount, 6)
+    )
+    return await this.sendWithReferral(tokenAddress, populated)
   }
 
   async getTokenBalance(tokenAddress: string, userAddress: string) {
@@ -127,8 +173,11 @@ export class ContractManager {
 
   async approveToken(tokenAddress: string, spenderAddress: string, amount: string) {
     const tokenContract = new ethers.Contract(tokenAddress, TEST_TOKEN_ABI, this.signer)
-    const tx = await tokenContract.approve(spenderAddress, ethers.utils.parseUnits(amount, 6))
-    return await tx.wait()
+    const populated = await tokenContract.populateTransaction.approve(
+      spenderAddress,
+      ethers.utils.parseUnits(amount, 6)
+    )
+    return await this.sendWithReferral(tokenAddress, populated)
   }
 }
 
